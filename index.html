@@ -4,34 +4,24 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Bluetooth Battery Monitor</title>
+  <title>Bluetooth Device Explorer</title>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/tailwindcss/2.2.19/tailwind.min.js"></script>
 </head>
 
 <body class="bg-gray-100 min-h-screen flex items-center justify-center">
   <div class="max-w-md w-full mx-4">
     <div class="bg-white rounded-lg shadow-lg p-6 space-y-6">
-      <h1 class="text-2xl font-bold text-center text-gray-800">Battery Monitor</h1>
+      <h1 class="text-2xl font-bold text-center text-gray-800">Bluetooth Device Explorer</h1>
 
       <!-- Device Info -->
       <div id="deviceInfo" class="text-center text-sm text-gray-600 hidden">
-        Connected to: <span id="deviceName">Unknown</span>
+        <div>Connected to: <span id="deviceName" class="font-semibold">Unknown</span></div>
+        <div>Device ID: <span id="deviceId" class="font-mono text-xs">Unknown</span></div>
       </div>
 
       <!-- Status display -->
       <div id="statusDisplay" class="text-center text-gray-600">
         Ready to connect
-      </div>
-
-      <!-- Battery Level Display -->
-      <div id="batteryDisplay" class="hidden">
-        <div class="relative h-8 bg-gray-200 rounded-full">
-          <div id="batteryLevel" class="h-full bg-green-500 rounded-full transition-all duration-500" style="width: 0%">
-          </div>
-        </div>
-        <div id="batteryText" class="text-center mt-2 text-lg font-semibold">
-          0%
-        </div>
       </div>
 
       <!-- Connect Button -->
@@ -44,24 +34,39 @@
       <div id="errorDisplay" class="hidden text-red-500 text-center text-sm"></div>
 
       <!-- Available Services -->
-      <div id="servicesDisplay" class="hidden text-sm text-gray-600">
-        <div class="font-semibold mb-1">Available Services:</div>
-        <div id="servicesList" class="space-y-1"></div>
+      <div id="servicesDisplay" class="hidden">
+        <div class="font-semibold mb-2 text-gray-700">Available Services:</div>
+        <div id="servicesList" class="space-y-3 text-sm"></div>
+      </div>
+
+      <!-- Characteristics -->
+      <div id="characteristicsDisplay" class="hidden">
+        <div class="font-semibold mb-2 text-gray-700">Characteristics:</div>
+        <div id="characteristicsList" class="space-y-2 text-sm"></div>
       </div>
     </div>
   </div>
 
   <script>
     const statusDisplay = document.getElementById('statusDisplay');
-    const batteryDisplay = document.getElementById('batteryDisplay');
-    const batteryLevel = document.getElementById('batteryLevel');
-    const batteryText = document.getElementById('batteryText');
     const connectBtn = document.getElementById('connectBtn');
     const errorDisplay = document.getElementById('errorDisplay');
     const deviceInfo = document.getElementById('deviceInfo');
     const deviceName = document.getElementById('deviceName');
+    const deviceId = document.getElementById('deviceId');
     const servicesDisplay = document.getElementById('servicesDisplay');
     const servicesList = document.getElementById('servicesList');
+    const characteristicsDisplay = document.getElementById('characteristicsDisplay');
+    const characteristicsList = document.getElementById('characteristicsList');
+
+    // Known service UUIDs
+    const SERVICE_NAMES = {
+      '00001800-0000-1000-8000-00805f9b34fb': 'Generic Access',
+      '00001801-0000-1000-8000-00805f9b34fb': 'Generic Attribute',
+      '0000180a-0000-1000-8000-00805f9b34fb': 'Device Information',
+      '0000180f-0000-1000-8000-00805f9b34fb': 'Battery Service',
+      '00001812-0000-1000-8000-00805f9b34fb': 'HID Service',
+    };
 
     // Check if Web Bluetooth API is supported
     if (!navigator.bluetooth) {
@@ -76,20 +81,24 @@
         // Reset displays
         errorDisplay.classList.add('hidden');
         servicesDisplay.classList.add('hidden');
+        characteristicsDisplay.classList.add('hidden');
         statusDisplay.textContent = 'Requesting Bluetooth device...';
 
         // Request device with optional services
         const device = await navigator.bluetooth.requestDevice({
-          // Accept all devices, but optionally filter by name if needed
           acceptAllDevices: true,
           optionalServices: [
-            'battery_service',
-            '0000180f-0000-1000-8000-00805f9b34fb', // Battery Service UUID
-            '00002a19-0000-1000-8000-00805f9b34fb'  // Battery Level Characteristic UUID
+            '00001800-0000-1000-8000-00805f9b34fb', // Generic Access
+            '00001801-0000-1000-8000-00805f9b34fb', // Generic Attribute
+            '0000180a-0000-1000-8000-00805f9b34fb', // Device Information
+            '0000180f-0000-1000-8000-00805f9b34fb', // Battery
+            '00001812-0000-1000-8000-00805f9b34fb'  // HID
           ]
         });
 
+        // Update device info
         deviceName.textContent = device.name || 'Unknown Device';
+        deviceId.textContent = device.id;
         deviceInfo.classList.remove('hidden');
 
         statusDisplay.textContent = 'Connecting to device...';
@@ -101,41 +110,54 @@
         servicesDisplay.classList.remove('hidden');
         servicesList.innerHTML = '';
 
+        // Process each service
         for (const service of services) {
-          const serviceName = service.uuid;
-          const serviceItem = document.createElement('div');
-          serviceItem.textContent = `• ${serviceName}`;
-          servicesList.appendChild(serviceItem);
+          const serviceDiv = document.createElement('div');
+          serviceDiv.className = 'p-2 bg-gray-50 rounded';
 
-          // If this is the battery service, try to read the battery level
-          if (serviceName.toLowerCase().includes('battery') ||
-            serviceName === '0000180f-0000-1000-8000-00805f9b34fb') {
-            try {
-              const characteristic = await service.getCharacteristic('battery_level');
-              batteryDisplay.classList.remove('hidden');
-              statusDisplay.textContent = 'Connected';
+          const serviceName = SERVICE_NAMES[service.uuid] || 'Unknown Service';
+          serviceDiv.innerHTML = `
+                        <div class="font-semibold">${serviceName}</div>
+                        <div class="text-xs font-mono text-gray-500">${service.uuid}</div>
+                    `;
 
-              // Read initial battery level
-              const value = await characteristic.readValue();
-              updateBatteryLevel(value.getUint8(0));
+          // Try to get characteristics
+          try {
+            const characteristics = await service.getCharacteristics();
+            if (characteristics.length > 0) {
+              const charList = document.createElement('div');
+              charList.className = 'mt-2 ml-4 space-y-1';
 
-              // Listen for battery level changes
-              characteristic.addEventListener('characteristicvaluechanged', (event) => {
-                updateBatteryLevel(event.target.value.getUint8(0));
-              });
-              await characteristic.startNotifications();
-            } catch (e) {
-              console.log('Could not read battery level:', e);
+              for (const char of characteristics) {
+                const charDiv = document.createElement('div');
+                charDiv.className = 'text-xs';
+                charDiv.innerHTML = `
+                                    <div>Characteristic: ${char.uuid}</div>
+                                    <div class="text-gray-500">Properties: ${Object.keys(char.properties).filter(p => char.properties[p]).join(', ')}</div>
+                                `;
+                charList.appendChild(charDiv);
+              }
+              serviceDiv.appendChild(charList);
             }
+          } catch (e) {
+            const errorDiv = document.createElement('div');
+            errorDiv.className = 'text-xs text-red-500 mt-1';
+            errorDiv.textContent = `Could not read characteristics: ${e.message}`;
+            serviceDiv.appendChild(errorDiv);
           }
+
+          servicesList.appendChild(serviceDiv);
         }
+
+        statusDisplay.textContent = 'Connected';
+        connectBtn.textContent = 'Reconnect';
 
         // Handle device disconnection
         device.addEventListener('gattserverdisconnected', () => {
           statusDisplay.textContent = 'Device disconnected';
-          batteryDisplay.classList.add('hidden');
           deviceInfo.classList.add('hidden');
           servicesDisplay.classList.add('hidden');
+          characteristicsDisplay.classList.add('hidden');
           connectBtn.textContent = 'Connect Device';
         });
 
@@ -143,23 +165,6 @@
         handleError(error);
       }
     });
-
-    function updateBatteryLevel(level) {
-      batteryLevel.style.width = `${level}%`;
-      batteryText.textContent = `${level}%`;
-
-      // Update color based on battery level
-      if (level <= 20) {
-        batteryLevel.classList.remove('bg-green-500', 'bg-yellow-500');
-        batteryLevel.classList.add('bg-red-500');
-      } else if (level <= 50) {
-        batteryLevel.classList.remove('bg-green-500', 'bg-red-500');
-        batteryLevel.classList.add('bg-yellow-500');
-      } else {
-        batteryLevel.classList.remove('bg-yellow-500', 'bg-red-500');
-        batteryLevel.classList.add('bg-green-500');
-      }
-    }
 
     function handleError(error) {
       console.error('Bluetooth Error:', error);
@@ -176,7 +181,6 @@
       }
 
       statusDisplay.textContent = 'Connection failed';
-      batteryDisplay.classList.add('hidden');
       deviceInfo.classList.add('hidden');
     }
   </script>

@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Bluetooth Battery Monitor</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/tailwindcss/2.2.19/tailwind.min.js"></script>
+</head>
+
+<body class="bg-gray-100 min-h-screen flex items-center justify-center">
+  <div class="max-w-md w-full mx-4">
+    <div class="bg-white rounded-lg shadow-lg p-6 space-y-6">
+      <h1 class="text-2xl font-bold text-center text-gray-800">Battery Monitor</h1>
+
+      <!-- Device Info -->
+      <div id="deviceInfo" class="text-center text-sm text-gray-600 hidden">
+        Connected to: <span id="deviceName">Unknown</span>
+      </div>
+
+      <!-- Status display -->
+      <div id="statusDisplay" class="text-center text-gray-600">
+        Ready to connect
+      </div>
+
+      <!-- Battery Level Display -->
+      <div id="batteryDisplay" class="hidden">
+        <div class="relative h-8 bg-gray-200 rounded-full">
+          <div id="batteryLevel" class="h-full bg-green-500 rounded-full transition-all duration-500" style="width: 0%">
+          </div>
+        </div>
+        <div id="batteryText" class="text-center mt-2 text-lg font-semibold">
+          0%
+        </div>
+      </div>
+
+      <!-- Connect Button -->
+      <button id="connectBtn"
+        class="w-full py-2 px-4 bg-blue-500 text-white rounded-lg hover:bg-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-opacity-50 transition-colors">
+        Connect Device
+      </button>
+
+      <!-- Error Display -->
+      <div id="errorDisplay" class="hidden text-red-500 text-center text-sm"></div>
+
+      <!-- Available Services -->
+      <div id="servicesDisplay" class="hidden text-sm text-gray-600">
+        <div class="font-semibold mb-1">Available Services:</div>
+        <div id="servicesList" class="space-y-1"></div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const statusDisplay = document.getElementById('statusDisplay');
+    const batteryDisplay = document.getElementById('batteryDisplay');
+    const batteryLevel = document.getElementById('batteryLevel');
+    const batteryText = document.getElementById('batteryText');
+    const connectBtn = document.getElementById('connectBtn');
+    const errorDisplay = document.getElementById('errorDisplay');
+    const deviceInfo = document.getElementById('deviceInfo');
+    const deviceName = document.getElementById('deviceName');
+    const servicesDisplay = document.getElementById('servicesDisplay');
+    const servicesList = document.getElementById('servicesList');
+
+    // Check if Web Bluetooth API is supported
+    if (!navigator.bluetooth) {
+      statusDisplay.textContent = 'Web Bluetooth API is not supported in this browser';
+      connectBtn.disabled = true;
+      connectBtn.classList.add('bg-gray-400');
+      connectBtn.classList.remove('bg-blue-500', 'hover:bg-blue-600');
+    }
+
+    connectBtn.addEventListener('click', async () => {
+      try {
+        // Reset displays
+        errorDisplay.classList.add('hidden');
+        servicesDisplay.classList.add('hidden');
+        statusDisplay.textContent = 'Requesting Bluetooth device...';
+
+        // Request device with optional services
+        const device = await navigator.bluetooth.requestDevice({
+          // Accept all devices, but optionally filter by name if needed
+          acceptAllDevices: true,
+          optionalServices: [
+            'battery_service',
+            '0000180f-0000-1000-8000-00805f9b34fb', // Battery Service UUID
+            '00002a19-0000-1000-8000-00805f9b34fb'  // Battery Level Characteristic UUID
+          ]
+        });
+
+        deviceName.textContent = device.name || 'Unknown Device';
+        deviceInfo.classList.remove('hidden');
+
+        statusDisplay.textContent = 'Connecting to device...';
+        const server = await device.gatt.connect();
+
+        // Display available services
+        statusDisplay.textContent = 'Discovering services...';
+        const services = await server.getPrimaryServices();
+        servicesDisplay.classList.remove('hidden');
+        servicesList.innerHTML = '';
+
+        for (const service of services) {
+          const serviceName = service.uuid;
+          const serviceItem = document.createElement('div');
+          serviceItem.textContent = `• ${serviceName}`;
+          servicesList.appendChild(serviceItem);
+
+          // If this is the battery service, try to read the battery level
+          if (serviceName.toLowerCase().includes('battery') ||
+            serviceName === '0000180f-0000-1000-8000-00805f9b34fb') {
+            try {
+              const characteristic = await service.getCharacteristic('battery_level');
+              batteryDisplay.classList.remove('hidden');
+              statusDisplay.textContent = 'Connected';
+
+              // Read initial battery level
+              const value = await characteristic.readValue();
+              updateBatteryLevel(value.getUint8(0));
+
+              // Listen for battery level changes
+              characteristic.addEventListener('characteristicvaluechanged', (event) => {
+                updateBatteryLevel(event.target.value.getUint8(0));
+              });
+              await characteristic.startNotifications();
+            } catch (e) {
+              console.log('Could not read battery level:', e);
+            }
+          }
+        }
+
+        // Handle device disconnection
+        device.addEventListener('gattserverdisconnected', () => {
+          statusDisplay.textContent = 'Device disconnected';
+          batteryDisplay.classList.add('hidden');
+          deviceInfo.classList.add('hidden');
+          servicesDisplay.classList.add('hidden');
+          connectBtn.textContent = 'Connect Device';
+        });
+
+      } catch (error) {
+        handleError(error);
+      }
+    });
+
+    function updateBatteryLevel(level) {
+      batteryLevel.style.width = `${level}%`;
+      batteryText.textContent = `${level}%`;
+
+      // Update color based on battery level
+      if (level <= 20) {
+        batteryLevel.classList.remove('bg-green-500', 'bg-yellow-500');
+        batteryLevel.classList.add('bg-red-500');
+      } else if (level <= 50) {
+        batteryLevel.classList.remove('bg-green-500', 'bg-red-500');
+        batteryLevel.classList.add('bg-yellow-500');
+      } else {
+        batteryLevel.classList.remove('bg-yellow-500', 'bg-red-500');
+        batteryLevel.classList.add('bg-green-500');
+      }
+    }
+
+    function handleError(error) {
+      console.error('Bluetooth Error:', error);
+      errorDisplay.classList.remove('hidden');
+
+      if (error.name === 'NotFoundError') {
+        errorDisplay.textContent = 'No compatible Bluetooth device found.';
+      } else if (error.name === 'SecurityError') {
+        errorDisplay.textContent = 'Bluetooth permission denied. Please allow access and try again.';
+      } else if (error.name === 'NotSupportedError') {
+        errorDisplay.textContent = 'Bluetooth not supported or enabled on this device.';
+      } else {
+        errorDisplay.textContent = `Error: ${error.message}`;
+      }
+
+      statusDisplay.textContent = 'Connection failed';
+      batteryDisplay.classList.add('hidden');
+      deviceInfo.classList.add('hidden');
+    }
+  </script>
+</body>
+
+</html>
